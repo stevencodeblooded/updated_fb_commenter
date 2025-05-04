@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Facebook Auto Commenter</title>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      padding: 10px;
+      width: 350px;
+      max-height: 600px;
+      overflow-y: auto;
+    }
+    
+    .container {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    
+    .header {
+      font-size: 18px;
+      font-weight: bold;
+      margin-bottom: 10px;
+    }
+    
+    .section {
+      background-color: #f5f6f7;
+      border-radius: 5px;
+      padding: 10px;
+      margin-bottom: 10px;
+    }
+    
+    textarea {
+      width: 100%;
+      min-height: 60px;
+      margin: 5px 0;
+      padding: 5px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+      resize: vertical;
+    }
+    
+    input[type="text"], input[type="number"] {
+      width: 100%;
+      margin: 5px 0;
+      padding: 5px;
+      border: 1px solid #ccc;
+      border-radius: 3px;
+    }
+    
+    button {
+      background-color: #1877F2;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      padding: 8px 12px;
+      cursor: pointer;
+      font-weight: bold;
+    }
+    
+    button:hover {
+      background-color: #166FE5;
+    }
+    
+    button:disabled {
+      background-color: #ccc;
+      cursor: not-allowed;
+    }
+    
+    .status {
+      margin-top: 10px;
+      padding: 5px;
+      border-radius: 3px;
+    }
+    
+    .success {
+      background-color: #e4f8e1;
+      color: #0a7d36;
+    }
+    
+    .error {
+      background-color: #fde6e6;
+      color: #d93025;
+    }
+    
+    .progress {
+      margin-top: 10px;
+      height: 20px;
+      border-radius: 5px;
+      background-color: #f1f1f1;
+    }
+    
+    .progress-bar {
+      height: 100%;
+      border-radius: 5px;
+      background-color: #4CAF50;
+      text-align: center;
+      line-height: 20px;
+      color: white;
+    }
+    
+    .tab-nav {
+      display: flex;
+      border-bottom: 1px solid #ccc;
+      margin-bottom: 10px;
+    }
+    
+    .tab {
+      padding: 8px 15px;
+      cursor: pointer;
+      border: 1px solid transparent;
+    }
+    
+    .tab.active {
+      border: 1px solid #ccc;
+      border-bottom: 1px solid white;
+      border-radius: 3px 3px 0 0;
+      margin-bottom: -1px;
+      background-color: white;
+    }
+    
+    .tab-content {
+      display: none;
+    }
+    
+    .tab-content.active {
+      display: block;
+    }
+    
+    .checkbox-label {
+      display: flex;
+      align-items: center;
+      margin: 5px 0;
+    }
+    
+    .checkbox-label input {
+      margin-right: 8px;
+    }
+    
+    .history-item {
+      margin-bottom: 5px;
+      padding: 5px;
+      border-bottom: 1px solid #eee;
+    }
+
+    .modal-info {
+      background-color: #e6f7ff;
+      padding: 8px;
+      border-radius: 5px;
+      margin-top: 10px;
+      border-left: 3px solid #1890ff;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">Facebook Auto Commenter</div>
+    
+    <div class="tab-nav">
+      <div class="tab active" data-tab="comment">Comment</div>
+      <div class="tab" data-tab="history">History</div>
+      <div class="tab" data-tab="settings">Settings</div>
+    </div>
+    
+    <div id="comment-tab" class="tab-content active">
+      <div class="section">
+        <div>
+          <label for="comment-mode">Comment Mode:</label>
+          <select id="comment-mode">
+            <option value="single">Single Comment</option>
+            <option value="multi">Multiple Comments</option>
+          </select>
+        </div>
+        
+        <div id="single-comment-section">
+          <label for="comment">Comment Text:</label>
+          <textarea id="comment" placeholder="Enter your comment here"></textarea>
+        </div>
+        
+        <div id="multi-comment-section" style="display: none;">
+          <label for="comments">Multiple Comments (one per line):</label>
+          <textarea id="comments" placeholder="Enter multiple comments, one per line"></textarea>
+          
+          <div class="checkbox-label">
+            <input type="checkbox" id="randomize">
+            <label for="randomize">Randomize Comments</label>
+          </div>
+        </div>
+      </div>
+      
+      <div class="section">
+        <label for="urls">Post URLs (one per line):</label>
+        <textarea id="urls" placeholder="Enter Facebook post URLs, one per line"></textarea>
+      </div>
+      
+      <div class="section">
+        <div>
+          <label for="delay">Delay between posts (seconds):</label>
+          <input type="number" id="delay" min="5" max="60" value="15">
+        </div>
+        
+        <div id="modal-settings">
+          <div class="checkbox-label">
+            <input type="checkbox" id="modal-handling" checked>
+            <label for="modal-handling">Enhanced Modal Dialog Handling</label>
+          </div>
+          <div class="modal-info">
+            Enables improved focus management for Facebook modal dialogs, ensuring comments are properly posted on modal posts.
+          </div>
+        </div>
+      </div>
+      
+      <button id="start">Start Commenting</button>
+      <button id="stop" disabled>Stop</button>
+      
+      <div id="status" class="status" style="display: none;"></div>
+      
+      <div id="progress-container" style="display: none;">
+        <div class="progress">
+          <div id="progress-bar" class="progress-bar" style="width: 0%">0%</div>
+        </div>
+        <div id="progress-text"></div>
+      </div>
+    </div>
+    
+    <div id="history-tab" class="tab-content">
+      <div class="section">
+        <h3>Comment History</h3>
+        <div>
+          <h4>Successful Comments:</h4>
+          <div id="successful-urls"></div>
+        </div>
+        <div>
+          <h4>Skipped Posts:</h4>
+          <div id="skipped-urls"></div>
+        </div>
+        <div>
+          <h4>Failed Comments:</h4>
+          <div id="failed-urls"></div>
+        </div>
+        <button id="clear-history">Clear History</button>
+      </div>
+    </div>
+    
+    <div id="settings-tab" class="tab-content">
+      <div class="section">
+        <h3>Advanced Settings</h3>
+        <div class="checkbox-label">
+          <input type="checkbox" id="skip-commented" checked>
+          <label for="skip-commented">Skip Already Commented Posts</label>
+        </div>
+        <div class="checkbox-label">
+          <input type="checkbox" id="debug-mode">
+          <label for="debug-mode">Debug Mode</label>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html>
