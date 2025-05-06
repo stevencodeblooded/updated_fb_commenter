@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Facebook Auto Commenter",
-  "version": "1.0.0",
-  "description": "Automatically add comments to Facebook posts with enhanced modal dialog support",
+  "version": "1.1.0",
+  "description": "Automatically add comments to Facebook posts with enhanced modal dialog support and secure authentication",
   "icons": {
     "16": "icons/icon16.png",
     "48": "icons/icon48.png",
@@ -11,7 +11,8 @@
   "permissions": ["storage", "tabs"],
   "host_permissions": [
     "https://web.facebook.com/*",
-    "https://www.facebook.com/*"
+    "https://www.facebook.com/*",
+    "https://raw.githubusercontent.com/*"
   ],
   "background": {
     "service_worker": "background.js"
