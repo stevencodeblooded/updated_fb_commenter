@@ -4,6 +4,7 @@
 const MODAL_RESPONSE_TIMEOUT = 45000; // 45 seconds for modal posts
 const STANDARD_RESPONSE_TIMEOUT = 30000; // 30 seconds for regular posts
 const MAX_HISTORY_ITEMS = 50; // Maximum number of URLs to store in history
+const MAX_CONSECUTIVE_FAILURES = 3; // Maximum allowed consecutive failures before pausing
 
 // State management for commenting
 let commentingState = {
@@ -18,6 +19,8 @@ let commentingState = {
   randomize: false,
   skippedPosts: 0, // Counter for skipped posts
   usedCommentIndices: [], // Track which comments have been used (for non-repeat random)
+  consecutiveFailures: 0, // Track consecutive failures
+  isPaused: false, // Track if process is paused due to errors
 };
 
 // Comment history for tracking success/failure of URLs
@@ -26,6 +29,10 @@ let commentHistory = {
   failedUrls: [], // {url, timestamp, reason}
   skippedUrls: [], // {url, timestamp, reason}
 };
+
+// Store the active tab when commenting starts
+let activeTabId = null;
+let isTabProcessing = false; // Flag to indicate a tab is currently processing
 
 // Save state to storage
 function saveState() {
@@ -141,7 +148,9 @@ function resetState() {
     randomize: false,
     skippedPosts: 0,
     usedCommentIndices: [],
-    debugMode: false, // Add debug mode property
+    debugMode: false,
+    consecutiveFailures: 0,
+    isPaused: false,
   };
   console.log("State reset");
   return saveState();
@@ -150,7 +159,7 @@ function resetState() {
 // Enhanced debugLog function
 function debugLog(...args) {
   if (commentingState.debugMode) {
-    console.log('[DEBUG]', ...args);
+    console.log("[DEBUG]", ...args);
   }
 }
 
@@ -212,11 +221,28 @@ function selectNextComment() {
   return selectedComment;
 }
 
-// Store the active tab when commenting starts
-let startingTabId = null;
+// Check if tab still exists
+async function isTabValid(tabId) {
+  try {
+    await chrome.tabs.get(tabId);
+    return true;
+  } catch (error) {
+    console.log(`Tab ${tabId} is no longer valid:`, error);
+    return false;
+  }
+}
 
 // Process next post with improved navigation and reliability
 async function processNextPost() {
+  // Skip if another post is already processing (prevents parallel processing)
+  if (isTabProcessing) {
+    console.log("Another post is currently processing, waiting...");
+    setTimeout(processNextPost, 5000); // Try again in 5 seconds
+    return;
+  }
+
+  isTabProcessing = true;
+
   try {
     await loadState();
 
@@ -228,17 +254,14 @@ async function processNextPost() {
       // Load comment history to get accurate counts
       const history = await loadCommentHistory();
 
-      // Count successful, failed, and skipped posts for this session
-      // We're focusing just on the most recent entries that match this session's count
-      const currentSessionCount = commentingState.posts.length;
-
-      // Calculate successful posts (posts that were actually commented on)
+      // Calculate statistics
       const successfulCount =
         commentingState.currentIndex - commentingState.skippedPosts;
 
-      // Failed posts (difference between total and successful+skipped)
       const failedCount =
-        currentSessionCount - successfulCount - commentingState.skippedPosts;
+        commentingState.posts.length -
+        successfulCount -
+        commentingState.skippedPosts;
 
       // Send complete message with full stats
       const finalMessage =
@@ -251,6 +274,7 @@ async function processNextPost() {
 
       // Now reset the state
       await resetState();
+      isTabProcessing = false;
 
       // Send enhanced message with counts
       chrome.runtime.sendMessage({
@@ -263,11 +287,32 @@ async function processNextPost() {
       return;
     }
 
+    // Check if process is paused due to too many consecutive errors
+    if (commentingState.isPaused) {
+      console.log("Process is paused due to too many consecutive failures");
+
+      // Notify popup
+      chrome.runtime.sendMessage({
+        action: "commentError",
+        error:
+          "Process paused: Too many consecutive errors. Check your internet connection or try again later.",
+        isPaused: true,
+      });
+
+      // Reset pause after some time
+      commentingState.consecutiveFailures = 0;
+      commentingState.isPaused = false;
+      await saveState();
+
+      isTabProcessing = false;
+      return;
+    }
+
     const currentUrl = commentingState.posts[commentingState.currentIndex];
     const selectedComment = selectNextComment();
 
     // Initialize isModal at the top level of the function scope
-    let isModal = false; // <-- Add this line
+    let isModal = false;
 
     console.log(
       `Processing post ${commentingState.currentIndex + 1}/${
@@ -278,75 +323,51 @@ async function processNextPost() {
     console.log(`Selected comment: "${selectedComment}"`);
 
     try {
-      // Find the best tab to use for processing
-      let targetTab;
-      let shouldUseStartingTab = false;
-
-      // First, check if startingTabId is still valid
-      if (startingTabId) {
-        try {
-          const startingTab = await chrome.tabs.get(startingTabId);
-          if (startingTab) {
-            shouldUseStartingTab = true;
-            targetTab = startingTab;
-            console.log(
-              "Using the same tab where the process started:",
-              startingTabId
-            );
-          }
-        } catch (error) {
-          console.log("Starting tab no longer exists, will find another tab");
-          startingTabId = null;
-        }
+      // Validate that the active tab is still valid
+      if (activeTabId && !(await isTabValid(activeTabId))) {
+        console.log("Active tab is no longer valid, finding a new one");
+        activeTabId = null;
       }
 
-      // If we can't use the starting tab, find an existing Facebook tab
-      if (!shouldUseStartingTab) {
+      // Find or create a tab to use
+      let targetTab;
+
+      if (activeTabId) {
+        // Use the existing active tab
+        targetTab = await chrome.tabs.get(activeTabId);
+        console.log("Using existing tab:", activeTabId);
+      } else {
+        // Find an existing Facebook tab or create a new one
         const facebookTabs = await chrome.tabs.query({
           url: ["https://web.facebook.com/*", "https://www.facebook.com/*"],
         });
 
         if (facebookTabs.length > 0) {
-          // Use existing Facebook tab
           targetTab = facebookTabs[0];
-          console.log("Using existing Facebook tab:", targetTab.id);
+          activeTabId = targetTab.id;
+          console.log("Using existing Facebook tab:", activeTabId);
         } else {
-          // If no Facebook tab exists, check for a normal browsing tab
-          const allTabs = await chrome.tabs.query({ currentWindow: true });
-          const normalTab = allTabs.find(
-            (tab) =>
-              !tab.url.startsWith("chrome:") &&
-              !tab.url.startsWith("chrome-extension:") &&
-              !tab.url.startsWith("devtools:")
-          );
+          // Create a new tab
+          targetTab = await chrome.tabs.create({ url: currentUrl });
+          activeTabId = targetTab.id;
+          console.log("Created new tab:", activeTabId);
 
-          if (normalTab) {
-            // Use an existing normal tab instead of creating a new one
-            targetTab = normalTab;
-            console.log("Using existing normal browsing tab:", targetTab.id);
-          } else {
-            // Create new tab only as last resort
-            console.log("Creating new tab as last resort");
-            targetTab = await chrome.tabs.create({ url: currentUrl });
-            // Update immediately to prevent waiting for creation
-            await new Promise((resolve) => setTimeout(resolve, 500));
-            return processNextPost(); // Restart this post processing
-          }
+          // Wait for new tab to initialize
+          await new Promise((resolve) => setTimeout(resolve, 3000));
         }
       }
 
-      // Navigate to the post URL
-      await chrome.tabs.update(targetTab.id, { url: currentUrl });
+      // Navigate to the post URL on the active tab
+      console.log(`Navigating tab ${activeTabId} to ${currentUrl}`);
+      await chrome.tabs.update(activeTabId, { url: currentUrl });
 
       // Wait for page load and Facebook to initialize
       console.log("Waiting for page to load completely...");
       await new Promise((resolve) => setTimeout(resolve, 8000));
 
-      // Ensure tab is still valid
-      try {
-        await chrome.tabs.get(targetTab.id);
-      } catch (error) {
-        throw new Error("Tab no longer exists");
+      // Verify tab is still valid after loading
+      if (!(await isTabValid(activeTabId))) {
+        throw new Error("Tab was closed during navigation");
       }
 
       // Check for post modal and verify stability
@@ -356,12 +377,21 @@ async function processNextPost() {
       try {
         // Check if post is a modal
         const postVerification = await new Promise((resolve, reject) => {
+          const timeoutId = setTimeout(() => {
+            reject(new Error("Content script verification timed out"));
+          }, 15000);
+
           chrome.tabs.sendMessage(
-            targetTab.id,
+            activeTabId,
             { action: "verifyPostStability" },
             (response) => {
+              clearTimeout(timeoutId);
               if (chrome.runtime.lastError) {
-                reject(chrome.runtime.lastError);
+                reject(
+                  new Error(
+                    `Content script error: ${chrome.runtime.lastError.message}`
+                  )
+                );
               } else if (response) {
                 resolve(response);
               } else {
@@ -384,15 +414,24 @@ async function processNextPost() {
 
           // Re-check modal to ensure it hasn't changed
           const stabilityCheck = await new Promise((resolve, reject) => {
+            const timeoutId = setTimeout(() => {
+              reject(new Error("Modal stability check timed out"));
+            }, 15000);
+
             chrome.tabs.sendMessage(
-              targetTab.id,
+              activeTabId,
               {
                 action: "checkModalStability",
                 previousInfo: modalInfo,
               },
               (response) => {
+                clearTimeout(timeoutId);
                 if (chrome.runtime.lastError) {
-                  reject(chrome.runtime.lastError);
+                  reject(
+                    new Error(
+                      `Modal stability check error: ${chrome.runtime.lastError.message}`
+                    )
+                  );
                 } else if (response) {
                   resolve(response);
                 } else {
@@ -416,25 +455,36 @@ async function processNextPost() {
         throw new Error("Could not verify post stability: " + error.message);
       }
 
-      // Send message to content script with timeout
-      console.log(`Sending message to tab ${targetTab.id}`);
+      // Send message to content script with improved error handling
+      console.log(`Sending comment message to tab ${activeTabId}`);
 
       // Use a promise with timeout for message handling
       const response = await Promise.race([
         new Promise((resolve, reject) => {
+          const timeoutId = setTimeout(
+            () => {
+              reject(new Error("Comment process timed out"));
+            },
+            isModal ? MODAL_RESPONSE_TIMEOUT : STANDARD_RESPONSE_TIMEOUT
+          );
+
           chrome.tabs.sendMessage(
-            targetTab.id,
+            activeTabId,
             {
               action: "processPost",
               comment: selectedComment,
               delay: commentingState.delay * 1000,
               isModalContext: isModal,
-              debugMode: commentingState.debugMode, // Pass debug mode to content script
+              debugMode: commentingState.debugMode,
             },
             (response) => {
+              clearTimeout(timeoutId);
               if (chrome.runtime.lastError) {
-                console.error("Runtime error:", chrome.runtime.lastError);
-                reject(chrome.runtime.lastError);
+                reject(
+                  new Error(
+                    `Content script error: ${chrome.runtime.lastError.message}`
+                  )
+                );
               } else if (response) {
                 resolve(response);
               } else {
@@ -443,22 +493,20 @@ async function processNextPost() {
             }
           );
         }),
-        // Timeout with adjusted value based on modal context
-        new Promise((resolve) =>
+        // Secondary timeout as fallback
+        new Promise((_, reject) =>
           setTimeout(
-            () =>
-              resolve({
-                success: true,
-                warning: isModal
-                  ? "Modal content script timed out but comment was likely posted"
-                  : "Content script timed out but comment was likely posted",
-              }),
-            isModal ? MODAL_RESPONSE_TIMEOUT : STANDARD_RESPONSE_TIMEOUT
+            () => reject(new Error("Content script communication timed out")),
+            (isModal ? MODAL_RESPONSE_TIMEOUT : STANDARD_RESPONSE_TIMEOUT) +
+              5000
           )
         ),
       ]);
 
-      console.log("Response from content script or timeout:", response);
+      console.log("Response from content script:", response);
+
+      // Reset consecutive failures on success
+      commentingState.consecutiveFailures = 0;
 
       // Handle skipped posts (already commented on)
       if (response.skipped) {
@@ -501,6 +549,19 @@ async function processNextPost() {
     } catch (error) {
       console.error("Error processing post:", error);
 
+      // Track consecutive failures
+      commentingState.consecutiveFailures++;
+
+      // Check if we should pause the process due to too many errors
+      if (commentingState.consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        commentingState.isPaused = true;
+        chrome.runtime.sendMessage({
+          action: "commentError",
+          error: `Process paused after ${MAX_CONSECUTIVE_FAILURES} consecutive failures. The last error was: ${error.message}`,
+          isPaused: true,
+        });
+      }
+
       // Enhanced error handling for modal-specific issues
       let errorMessage = error.message;
 
@@ -514,6 +575,18 @@ async function processNextPost() {
         errorMessage = `Modal dialog error: ${error.message}. This might be due to Facebook's interface changes.`;
       }
 
+      // Handle connection errors
+      if (
+        error.message.includes("could not establish connection") ||
+        error.message.includes("disconnected") ||
+        error.message.includes("timed out")
+      ) {
+        errorMessage = `Connection error: ${error.message}. Extension will continue trying to process posts.`;
+
+        // Try to reset the tab
+        activeTabId = null;
+      }
+
       // Record failed comment with enhanced error info
       recordFailedComment(currentUrl, errorMessage);
 
@@ -521,6 +594,7 @@ async function processNextPost() {
       chrome.runtime.sendMessage({
         action: "commentError",
         currentIndex: commentingState.currentIndex + 1,
+        totalPosts: commentingState.posts.length,
         url: currentUrl,
         error: `Error on post ${
           commentingState.currentIndex + 1
@@ -533,18 +607,48 @@ async function processNextPost() {
     commentingState.currentIndex++;
     await saveState();
 
-    // Schedule next post with the specified delay
-    setTimeout(processNextPost, commentingState.delay * 1000);
+    // Release the processing lock
+    isTabProcessing = false;
+
+    // Schedule next post with the specified delay, but only if not paused
+    if (!commentingState.isPaused) {
+      setTimeout(processNextPost, commentingState.delay * 1000);
+    }
   } catch (error) {
     console.error("Fatal error in processNextPost:", error);
 
-    // Reset state on fatal error
-    await resetState();
+    // Release the processing lock
+    isTabProcessing = false;
+
+    // Try to reset the active tab
+    activeTabId = null;
+
+    // Pause the process in case of fatal errors
+    commentingState.isPaused = true;
+    await saveState();
 
     chrome.runtime.sendMessage({
       action: "commentError",
-      error: `Fatal error: ${error.message}`,
+      error: `Fatal error: ${error.message}. Process has been paused.`,
+      isPaused: true,
     });
+  }
+}
+
+// Add handler for resuming the process
+async function resumeCommenting() {
+  console.log("Resuming commenting process");
+  await loadState();
+
+  if (commentingState.isCommenting) {
+    commentingState.isPaused = false;
+    commentingState.consecutiveFailures = 0;
+    await saveState();
+
+    // Only start if not already processing
+    if (!isTabProcessing) {
+      processNextPost();
+    }
   }
 }
 
@@ -559,8 +663,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       // Store the active tab ID when starting to comment
       chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
         if (tabs.length > 0) {
-          startingTabId = tabs[0].id;
-          console.log("Stored starting tab ID:", startingTabId);
+          activeTabId = tabs[0].id;
+          console.log("Stored starting tab ID:", activeTabId);
         }
       });
 
@@ -577,7 +681,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         randomize: request.randomize,
         skippedPosts: 0,
         usedCommentIndices: [],
-        debugMode: request.debugMode || false, // Store debug mode flag
+        debugMode: request.debugMode || false,
+        consecutiveFailures: 0,
+        isPaused: false,
       };
 
       if (commentingState.debugMode) {
@@ -599,6 +705,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       console.log("Stopping commenting process");
       commentingState.isCommenting = false;
       saveState();
+      sendResponse({ success: true });
+      return true;
+
+    case "resumeCommenting":
+      resumeCommenting();
       sendResponse({ success: true });
       return true;
 
@@ -653,4 +764,18 @@ chrome.runtime.onStartup.addListener(() => {
   console.log("Extension started up");
   loadState();
   loadCommentHistory();
+});
+
+// Handle tab removal to reset activeTabId if needed
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (tabId === activeTabId) {
+    console.log(`Active tab ${tabId} was closed, resetting activeTabId`);
+    activeTabId = null;
+
+    // If we were in the middle of processing, this could cause issues
+    // so we'll release the processing lock
+    if (isTabProcessing) {
+      isTabProcessing = false;
+    }
+  }
 });

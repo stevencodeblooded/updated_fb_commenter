@@ -1,5 +1,3 @@
-// Popup script for Facebook Auto Commenter
-
 document.addEventListener("DOMContentLoaded", function () {
   // Import auth module
   import("./auth.js")
@@ -71,6 +69,7 @@ document.addEventListener("DOMContentLoaded", function () {
     const randomizeCheckbox = document.getElementById("randomize");
     const startButton = document.getElementById("start");
     const stopButton = document.getElementById("stop");
+    const resumeButton = document.getElementById("resume"); // New resume button
     const statusDiv = document.getElementById("status");
     const progressContainer = document.getElementById("progress-container");
     const progressBar = document.getElementById("progress-bar");
@@ -79,11 +78,17 @@ document.addEventListener("DOMContentLoaded", function () {
     const skipCommentedCheckbox = document.getElementById("skip-commented");
     const debugModeCheckbox = document.getElementById("debug-mode");
     const clearHistoryButton = document.getElementById("clear-history");
+    const useExistingTabCheckbox = document.getElementById("use-existing-tab"); // New checkbox
 
     // History elements
     const successfulUrlsDiv = document.getElementById("successful-urls");
     const skippedUrlsDiv = document.getElementById("skipped-urls");
     const failedUrlsDiv = document.getElementById("failed-urls");
+
+    // Initially hide the resume button
+    if (resumeButton) {
+      resumeButton.style.display = "none";
+    }
 
     // Load state on popup open
     loadState();
@@ -127,10 +132,14 @@ document.addEventListener("DOMContentLoaded", function () {
       const modalHandling = modalHandlingCheckbox.checked;
       const skipCommented = skipCommentedCheckbox.checked;
       const debugMode = debugModeCheckbox.checked;
+      const useExistingTab = useExistingTabCheckbox
+        ? useExistingTabCheckbox.checked
+        : true;
 
       // Update UI
       startButton.disabled = true;
       stopButton.disabled = false;
+      if (resumeButton) resumeButton.style.display = "none";
       statusDiv.textContent = "Starting commenting process...";
       statusDiv.className = "status";
       statusDiv.style.display = "block";
@@ -152,6 +161,7 @@ document.addEventListener("DOMContentLoaded", function () {
           modalHandling: modalHandling,
           skipCommented: skipCommented,
           debugMode: debugMode,
+          useExistingTab: useExistingTab,
         },
         function (response) {
           if (response && response.success) {
@@ -173,9 +183,29 @@ document.addEventListener("DOMContentLoaded", function () {
           showStatus("Commenting process stopped", "success");
           startButton.disabled = false;
           stopButton.disabled = true;
+          if (resumeButton) resumeButton.style.display = "none";
         }
       );
     });
+
+    // Resume button click handler
+    if (resumeButton) {
+      resumeButton.addEventListener("click", function () {
+        chrome.runtime.sendMessage(
+          { action: "resumeCommenting" },
+          function (response) {
+            if (response && response.success) {
+              showStatus("Commenting process resumed", "success");
+              startButton.disabled = true;
+              stopButton.disabled = false;
+              resumeButton.style.display = "none";
+            } else {
+              showStatus("Failed to resume commenting", "error");
+            }
+          }
+        );
+      });
+    }
 
     // Clear history button click handler
     clearHistoryButton.addEventListener("click", function () {
@@ -229,7 +259,8 @@ document.addEventListener("DOMContentLoaded", function () {
         // Refresh history
         loadHistory();
       } else if (request.action === "commentError") {
-        const { currentIndex, totalPosts, error, isModalError } = request;
+        const { currentIndex, totalPosts, error, isModalError, isPaused } =
+          request;
 
         if (currentIndex && totalPosts) {
           // Update progress for error case
@@ -250,6 +281,20 @@ document.addEventListener("DOMContentLoaded", function () {
           stopButton.disabled = true;
         }
 
+        // Show resume button if process is paused
+        if (isPaused && resumeButton) {
+          resumeButton.style.display = "block";
+          stopButton.disabled = true;
+          startButton.disabled = true;
+
+          // Show special status for paused state
+          showStatus(
+            "Process paused due to errors. Check your internet connection and click Resume to continue.",
+            "error",
+            false
+          );
+        }
+
         // Refresh history
         loadHistory();
       } else if (request.action === "commentingComplete") {
@@ -259,6 +304,7 @@ document.addEventListener("DOMContentLoaded", function () {
         showStatus(message, "success");
         startButton.disabled = false;
         stopButton.disabled = true;
+        if (resumeButton) resumeButton.style.display = "none";
 
         // Create detailed completion message
         let completionText = message;
@@ -276,13 +322,13 @@ document.addEventListener("DOMContentLoaded", function () {
     });
 
     // Helper functions
-    function showStatus(message, type) {
+    function showStatus(message, type, autoHide = true) {
       statusDiv.textContent = message;
       statusDiv.className = "status " + (type || "");
       statusDiv.style.display = "block";
 
-      // Auto-hide status after 5 seconds for non-error messages
-      if (type !== "error") {
+      // Auto-hide status after 5 seconds for non-error messages or if explicitly requested
+      if (type !== "error" && autoHide) {
         setTimeout(() => {
           statusDiv.style.display = "none";
         }, 5000);
@@ -298,6 +344,19 @@ document.addEventListener("DOMContentLoaded", function () {
             startButton.disabled = true;
             stopButton.disabled = false;
             progressContainer.style.display = "block";
+
+            // Handle paused state
+            if (state.isPaused && resumeButton) {
+              resumeButton.style.display = "block";
+              stopButton.disabled = true;
+              showStatus(
+                "Process is paused due to errors. Click Resume to continue.",
+                "error",
+                false
+              );
+            } else if (resumeButton) {
+              resumeButton.style.display = "none";
+            }
 
             // Calculate percentage
             const percentage =
@@ -328,6 +387,11 @@ document.addEventListener("DOMContentLoaded", function () {
 
             // Pre-fill URLs
             urlsInput.value = state.posts.join("\n");
+
+            // Set debug mode checkbox if applicable
+            if (debugModeCheckbox) {
+              debugModeCheckbox.checked = state.debugMode || false;
+            }
           }
         }
       );
@@ -405,6 +469,12 @@ document.addEventListener("DOMContentLoaded", function () {
                 item.reason.includes("dialog") ||
                 item.reason.includes("focus");
 
+              // Highlight connection errors
+              const isConnectionError =
+                item.reason.includes("connection") ||
+                item.reason.includes("disconnected") ||
+                item.reason.includes("timed out");
+
               div.innerHTML = `
             <div><strong>URL:</strong> <a href="${
               item.url
@@ -412,6 +482,8 @@ document.addEventListener("DOMContentLoaded", function () {
             <div><strong>Error:</strong> ${
               isModalError
                 ? '<span style="color:#1877F2">(Modal Issue)</span> '
+                : isConnectionError
+                ? '<span style="color:#FF5722">(Connection Issue)</span> '
                 : ""
             }${item.reason}</div>
             <div><strong>Date:</strong> ${formattedDate}</div>

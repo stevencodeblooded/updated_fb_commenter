@@ -72,6 +72,7 @@
       cursor: pointer;
       font-weight: bold;
       transition: background-color 0.2s;
+      margin-right: 5px;
     }
     
     button:hover {
@@ -81,6 +82,20 @@
     button:disabled {
       background-color: #ccc;
       cursor: not-allowed;
+    }
+    
+    .button-container {
+      display: flex;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    
+    #resume {
+      background-color: #4CAF50;
+    }
+    
+    #resume:hover {
+      background-color: #388E3C;
     }
     
     .status {
@@ -244,6 +259,14 @@
     .logout-btn:hover {
       background-color: #e7f3ff;
     }
+    
+    .warning-info {
+      background-color: #fff3e0;
+      padding: 10px;
+      border-radius: 6px;
+      margin-top: 10px;
+      border-left: 3px solid #FF9800;
+    }
   </style>
 </head>
 <body>
@@ -335,10 +358,23 @@
             Enables improved focus management for Facebook modal dialogs, ensuring comments are properly posted on modal posts.
           </div>
         </div>
+        
+        <div id="connection-settings">
+          <div class="checkbox-label">
+            <input type="checkbox" id="use-existing-tab" checked>
+            <label for="use-existing-tab">Use Single Tab</label>
+          </div>
+          <div class="warning-info">
+            Recommended to prevent connection issues. Uses a single tab for all posts instead of creating new tabs.
+          </div>
+        </div>
       </div>
       
-      <button id="start">Start Commenting</button>
-      <button id="stop" disabled>Stop</button>
+      <div class="button-container">
+        <button id="start">Start Commenting</button>
+        <button id="stop" disabled>Stop</button>
+        <button id="resume" style="display: none;">Resume</button>
+      </div>
       
       <div id="status" class="status" style="display: none;"></div>
       
@@ -379,6 +415,15 @@
         <div class="checkbox-label">
           <input type="checkbox" id="debug-mode">
           <label for="debug-mode">Debug Mode</label>
+        </div>
+        
+        <div class="warning-info" style="margin-top: 15px;">
+          <strong>Connection issues?</strong> Try these settings:
+          <ul>
+            <li>Enable "Use Single Tab" in the Comment tab</li>
+            <li>Increase the delay between posts (15+ seconds)</li>
+            <li>Process fewer posts at once (max 20-30)</li>
+          </ul>
         </div>
       </div>
     </div>
